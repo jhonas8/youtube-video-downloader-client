@@ -1,72 +1,206 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { Download, Youtube, Twitter, Instagram } from "lucide-react"
+import { Download, Youtube, Twitter, Instagram, Loader2, Clock, User, Eye, HelpCircle } from "lucide-react"
 
-// Mock video resolutions for demo purposes
-const RESOLUTIONS = {
-  youtube: ["1080p", "720p", "480p", "360p", "240p"],
-  twitter: ["720p", "480p", "360p"],
-  tiktok: ["720p", "480p", "360p"],
-  instagram: ["1080p", "720p", "480p"],
-}
+// Import the VideoDownloader and YouTubeDownloader classes
+import { VideoInfo, VideoFormat, VideoPreview } from "@/utils/videoProcessing/VideoDownloader"
+import { YouTubeDownloader } from "@/utils/videoProcessing/YouTubeDownloader"
+
+// Create instances of platform downloaders
+const youtubeDownloader = new YouTubeDownloader()
 
 export default function VideoDownloader() {
   const [url, setUrl] = useState("")
-  const [videoInfo, setVideoInfo] = useState<null | {
-    platform: string
-    title: string
-    thumbnail: string
-    resolutions: string[]
-  }>(null)
-  const [selectedResolution, setSelectedResolution] = useState("")
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [videoPreview, setVideoPreview] = useState<VideoPreview | null>(null)
+  const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [isDownloading, setIsDownloading] = useState(false)
 
-  const detectPlatform = (url: string) => {
-    if (url.includes("youtube.com") || url.includes("youtu.be")) return "youtube"
+  const detectPlatform = (url: string): string | null => {
+    if (youtubeDownloader.validateURL(url)) return "youtube"
     if (url.includes("twitter.com") || url.includes("x.com")) return "twitter"
     if (url.includes("tiktok.com")) return "tiktok"
     if (url.includes("instagram.com")) return "instagram"
     return null
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
+  const getMockInfo = (platform: string): VideoInfo => {
+    // Mock data for platforms other than YouTube
+    const resolutions = {
+      twitter: ["720p", "480p", "360p"],
+      tiktok: ["720p", "480p", "360p"],
+      instagram: ["1080p", "720p", "480p"],
+    }
 
-    // Simulate API call to get video info
-    setTimeout(() => {
-      const platform = detectPlatform(url)
+    const mockFormats = (resolutions[platform as keyof typeof resolutions] || []).map(resolution => ({
+      quality: resolution,
+      format: 'video/mp4',
+      container: 'mp4',
+      hasAudio: true,
+      hasVideo: true,
+      bitrate: resolution === '720p' ? 2000000 : resolution === '480p' ? 1000000 : 500000
+    }))
 
-      if (platform) {
-        const mockVideoInfo = {
-          platform,
-          title: `Sample ${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`,
-          thumbnail: `/placeholder.svg?height=720&width=1280`,
-          resolutions: RESOLUTIONS[platform as keyof typeof RESOLUTIONS] || [],
-        }
-
-        setVideoInfo(mockVideoInfo)
-        setSelectedResolution(mockVideoInfo.resolutions[0])
-      } else {
-        // Handle unsupported platform
-        alert("Unsupported video platform. Please enter a valid URL from YouTube, Twitter, TikTok, or Instagram.")
-      }
-
-      setIsLoading(false)
-    }, 1000)
+    return {
+      title: `Sample ${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`,
+      thumbnail: `/placeholder.svg?height=720&width=1280`,
+      formats: mockFormats,
+      platform
+    }
   }
 
-  const handleDownload = () => {
-    // In a real implementation, this would trigger the actual download
-    // For demo purposes, we'll just show an alert
-    alert(`Downloading ${videoInfo?.title} in ${selectedResolution} resolution`)
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+    setVideoPreview(null)
+    setVideoInfo(null)
+
+    // Show processing toast
+    const toastId = toast.loading("Processing video link...")
+
+    try {
+      const platform = detectPlatform(url)
+      
+      if (!platform) {
+        toast.error("Unsupported video platform", {
+          id: toastId,
+          description: "Please enter a valid URL from YouTube, Twitter, TikTok, or Instagram.",
+        })
+        setIsLoading(false)
+        return
+      }
+
+      // First get preview info to show immediately
+      try {
+        if (platform === 'youtube') {
+          const preview = await youtubeDownloader.getPreviewInfo(url)
+          setVideoPreview(preview)
+          
+          // Update loading toast to show we're fetching formats
+          toast.loading("Fetching available formats...", {
+            id: toastId,
+          })
+        } else {
+          // For other platforms, set basic mock preview
+          setVideoPreview({
+            title: `Sample ${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`,
+            thumbnail: `/placeholder.svg?height=720&width=1280`,
+            platform
+          })
+        }
+      } catch (previewError) {
+        console.error('Error getting video preview:', previewError)
+        // Continue even if preview fails - don't update the toast
+      }
+
+      // Then get detailed format info
+      let info: VideoInfo
+      
+      if (platform === 'youtube') {
+        info = await youtubeDownloader.getInfo(url)
+      } else {
+        // For other platforms, use mock data for now
+        info = getMockInfo(platform)
+      }
+      
+      setVideoInfo(info)
+      
+      // Select the highest quality format by default
+      if (info.formats.length > 0) {
+        // Sort formats by quality (prefer formats with both audio and video)
+        const sortedFormats = [...info.formats].sort((a, b) => {
+          // Prefer formats with both audio and video
+          if (a.hasAudio && a.hasVideo && (!b.hasAudio || !b.hasVideo)) {
+            return -1
+          }
+          if (b.hasAudio && b.hasVideo && (!a.hasAudio || !a.hasVideo)) {
+            return 1
+          }
+          // Otherwise sort by bitrate
+          return (b.bitrate || 0) - (a.bitrate || 0)
+        })
+        
+        setSelectedFormat(sortedFormats[0])
+        
+        // Success toast
+        toast.success("Video processed successfully", {
+          id: toastId,
+          description: `Found ${info.formats.length} available formats`,
+        })
+      }
+    } catch (err) {
+      console.error('Error getting video info:', err)
+      toast.error("Failed to process video", {
+        id: toastId,
+        description: "Please check the URL and try again.",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDownload = async () => {
+    if (!videoInfo || !selectedFormat) return
+    
+    setIsDownloading(true)
+    
+    // Show download starting toast
+    const toastId = toast.loading(`Starting download...`, {
+      description: `${videoInfo.title} (${selectedFormat.quality})`,
+    })
+    
+    try {
+      if (videoInfo.platform === 'youtube') {
+        await youtubeDownloader.downloadVideo(url, selectedFormat, videoInfo.title)
+        
+        // Success toast for download
+        toast.success(`Download complete!`, {
+          id: toastId,
+          description: `${videoInfo.title} has been downloaded in ${selectedFormat.quality}`,
+        })
+      } else {
+        // For other platforms (mock implementation)
+        // Simulate a delay
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        
+        toast.success(`Download complete!`, {
+          id: toastId,
+          description: `${videoInfo.title} has been downloaded in ${selectedFormat.quality}`,
+          action: {
+            label: "Open",
+            onClick: () => toast.info("This would open the file in a real implementation"),
+          },
+        })
+      }
+    } catch (err) {
+      console.error('Download error:', err)
+      toast.error("Download failed", {
+        id: toastId,
+        description: "Please try again or select a different format.",
+      })
+    } finally {
+      setIsDownloading(false)
+    }
+  }
+
+  const getFormatLabel = (format: VideoFormat): string => {
+    let label = format.quality
+    
+    if (format.hasVideo && !format.hasAudio) {
+      label += " (Video Only)"
+    } else if (!format.hasVideo && format.hasAudio) {
+      label += " (Audio Only)"
+    }
+    
+    return label
   }
 
   const getPlatformIcon = (platform: string) => {
@@ -93,49 +227,105 @@ export default function VideoDownloader() {
             onChange={(e) => setUrl(e.target.value)}
             required
             className="flex-1"
+            disabled={isLoading}
           />
           <Button type="submit" disabled={isLoading}>
-            {isLoading ? "Loading..." : "Get Video"}
+            {isLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Processing
+              </>
+            ) : (
+              "Get Video"
+            )}
           </Button>
         </div>
       </form>
 
-      {videoInfo && (
+      {videoPreview && (
         <Card className="overflow-hidden">
           <div className="aspect-video relative bg-muted">
             <img
-              src={videoInfo.thumbnail || "/placeholder.svg"}
-              alt={videoInfo.title}
+              src={videoPreview.thumbnail || "/placeholder.svg"}
+              alt={videoPreview.title}
               className="w-full h-full object-cover"
             />
             <div className="absolute top-2 right-2 bg-background/80 backdrop-blur-sm rounded-full p-1">
-              {getPlatformIcon(videoInfo.platform)}
+              {getPlatformIcon(videoPreview.platform)}
             </div>
           </div>
           <CardContent className="p-6">
-            <h2 className="text-xl font-semibold mb-4">{videoInfo.title}</h2>
-
-            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-              <div className="w-full sm:w-48">
-                <Select value={selectedResolution} onValueChange={setSelectedResolution}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select Resolution" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {videoInfo.resolutions.map((resolution) => (
-                      <SelectItem key={resolution} value={resolution}>
-                        {resolution}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            <h2 className="text-xl font-semibold mb-4">{videoPreview.title}</h2>
+            
+            {/* Additional video metadata if available */}
+            {(videoPreview.author || videoPreview.duration || videoPreview.views) && (
+              <div className="flex flex-wrap gap-4 text-sm text-muted-foreground mb-4">
+                {videoPreview.author && (
+                  <div className="flex items-center gap-1">
+                    <User className="h-4 w-4" />
+                    <span>{videoPreview.author}</span>
+                  </div>
+                )}
+                {videoPreview.duration && (
+                  <div className="flex items-center gap-1">
+                    <Clock className="h-4 w-4" />
+                    <span>{videoPreview.duration}</span>
+                  </div>
+                )}
+                {videoPreview.views && (
+                  <div className="flex items-center gap-1">
+                    <Eye className="h-4 w-4" />
+                    <span>{videoPreview.views}</span>
+                  </div>
+                )}
               </div>
+            )}
 
-              <Button onClick={handleDownload} className="w-full sm:w-auto">
-                <Download className="mr-2 h-4 w-4" />
-                Download
-              </Button>
-            </div>
+            {/* Format selection and download button */}
+            {videoInfo ? (
+              <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                <div className="w-full sm:w-64">
+                  <Select 
+                    value={selectedFormat ? videoInfo.formats.indexOf(selectedFormat).toString() : ""}
+                    onValueChange={(value) => setSelectedFormat(videoInfo.formats[parseInt(value)])}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select Format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {videoInfo.formats.map((format, index) => (
+                        <SelectItem key={index} value={index.toString()}>
+                          {getFormatLabel(format)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <Button 
+                  onClick={handleDownload} 
+                  className="w-full sm:w-auto"
+                  disabled={isDownloading || !selectedFormat}
+                >
+                  {isDownloading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-12">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                <span className="text-muted-foreground">Loading available formats...</span>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -162,6 +352,21 @@ export default function VideoDownloader() {
             <span>TikTok</span>
           </div>
         </div>
+      </div>
+
+      {/* Add a helper button to demonstrate toast notifications */}
+      <div className="flex justify-center">
+        <Button
+          variant="outline"
+          onClick={() => {
+            toast.info("Try pasting a video URL", {
+              description: "This app supports YouTube, Twitter, TikTok, and Instagram videos",
+            })
+          }}
+        >
+          <HelpCircle className="mr-2 h-4 w-4" />
+          Need help?
+        </Button>
       </div>
     </div>
   )

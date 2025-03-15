@@ -1,7 +1,7 @@
 "use client";
 
 import ytdl from 'ytdl-core';
-import { VideoDownloader, VideoInfo, VideoFormat } from './VideoDownloader';
+import { VideoDownloader, VideoInfo, VideoFormat, VideoPreview } from './VideoDownloader';
 
 /**
  * YouTube video downloader implementation using ytdl-core
@@ -48,7 +48,8 @@ export class YouTubeDownloader extends VideoDownloader {
         hasAudio: !!format.hasAudio,
         hasVideo: !!format.hasVideo,
         size: format.contentLength ? parseInt(format.contentLength) : undefined,
-        bitrate: format.bitrate
+        bitrate: format.bitrate,
+        url: format.url  // Include direct URL for downloading
       }));
 
       return {
@@ -60,6 +61,51 @@ export class YouTubeDownloader extends VideoDownloader {
     } catch (error) {
       console.error('Failed to get YouTube video info:', error);
       throw new Error('Failed to get video information');
+    }
+  }
+
+  /**
+   * Get basic preview information about the YouTube video
+   * This is useful for displaying a preview before downloading
+   * @param url The YouTube URL
+   * @returns Promise with basic video preview information
+   */
+  async getPreviewInfo(url: string): Promise<VideoPreview> {
+    try {
+      // Use getBasicInfo to minimize data usage for preview
+      const info = await ytdl.getBasicInfo(url);
+      
+      // Format duration from seconds to readable time
+      let durationStr = '';
+      if (info.videoDetails.lengthSeconds) {
+        const duration = parseInt(info.videoDetails.lengthSeconds);
+        const hours = Math.floor(duration / 3600);
+        const minutes = Math.floor((duration % 3600) / 60);
+        const seconds = duration % 60;
+        
+        if (hours > 0) {
+          durationStr = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        } else {
+          durationStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+      }
+      
+      // Format view count with commas
+      const views = info.videoDetails.viewCount ? 
+        parseInt(info.videoDetails.viewCount).toLocaleString() : 
+        'Unknown';
+
+      return {
+        title: info.videoDetails.title,
+        thumbnail: info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1]?.url || '',
+        duration: durationStr,
+        author: info.videoDetails.author?.name || 'Unknown',
+        views: `${views} views`,
+        platform: 'youtube'
+      };
+    } catch (error) {
+      console.error('Failed to get YouTube video preview:', error);
+      throw new Error('Failed to get video preview information');
     }
   }
 
@@ -77,7 +123,7 @@ export class YouTubeDownloader extends VideoDownloader {
       return `Audio ${format.audioBitrate}kbps`;
     }
     
-    return format.quality || 'unknown';
+    return format.quality.toString() || 'unknown';
   }
 
   /**
@@ -115,7 +161,44 @@ export class YouTubeDownloader extends VideoDownloader {
    */
   createDownloadStream(url: string, format: VideoFormat): ReadableStream {
     try {
-      // Set up ytdl options based on the format
+      // If format already has a direct URL, use it
+      if (format.url) {
+        // Return a new ReadableStream that fetches the content
+        return new ReadableStream({
+          async start(controller) {
+            try {
+              const response = await fetch(format.url!);
+              
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              
+              if (!response.body) {
+                throw new Error('Response body is null');
+              }
+              
+              const reader = response.body.getReader();
+              
+              // Read the stream
+              while (true) {
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                  controller.close();
+                  break;
+                }
+                
+                controller.enqueue(value);
+              }
+            } catch (error) {
+              console.error('Error in fetch stream:', error);
+              controller.error(error);
+            }
+          }
+        });
+      }
+      
+      // Otherwise, set up ytdl options based on the format
       const ytdlOptions: ytdl.downloadOptions = {
         quality: format.quality,
         filter: (f) => {
@@ -174,7 +257,27 @@ export class YouTubeDownloader extends VideoDownloader {
       const extension = format.container;
       const fullFilename = `${videoFilename}.${extension}`;
       
-      // Create download stream
+      // Use direct URL if available
+      if (format.url) {
+        const downloadUrl = format.url;
+        
+        // Create and click a download link
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = fullFilename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        
+        // Clean up
+        setTimeout(() => {
+          document.body.removeChild(a);
+        }, 100);
+        
+        return;
+      }
+      
+      // Otherwise create download stream
       const stream = this.createDownloadStream(url, format);
       
       // Create a download link

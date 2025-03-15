@@ -16,6 +16,16 @@ export interface VideoFormat {
   hasVideo: boolean
   size?: number
   bitrate?: number
+  url?: string  // Added url property for direct download links
+}
+
+export interface VideoPreview {
+  title: string
+  thumbnail: string
+  duration?: string
+  author?: string
+  views?: string
+  platform: string
 }
 
 export abstract class VideoDownloader {
@@ -39,6 +49,14 @@ export abstract class VideoDownloader {
    * @returns Promise with video information
    */
   abstract getInfo(url: string): Promise<VideoInfo>
+
+  /**
+   * Get basic preview information about the video
+   * This is useful for displaying a preview before downloading
+   * @param url The video URL
+   * @returns Promise with basic video preview information
+   */
+  abstract getPreviewInfo(url: string): Promise<VideoPreview>
 
   /**
    * Choose the best format based on the requested quality
