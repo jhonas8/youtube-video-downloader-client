@@ -4,16 +4,60 @@ import ytdl from 'ytdl-core';
 import { VideoDownloader, VideoInfo, VideoFormat, VideoPreview } from './VideoDownloader';
 
 /**
- * YouTube video downloader implementation using ytdl-core
+ * YouTube video downloader implementation using server-side API
  */
 export class YouTubeDownloader extends VideoDownloader {
+  private logPrefix = '[YouTubeDownloader]';
+  private apiBaseUrl = '/api/youtube';
+
+  /**
+   * Log a message with timestamp
+   */
+  private log(level: 'info' | 'warn' | 'error', message: string, data?: any): void {
+    const timestamp = new Date().toISOString();
+    const logMessage = `${this.logPrefix} [${timestamp}] ${message}`;
+    
+    switch (level) {
+      case 'info':
+        if (data) {
+          console.log(logMessage, data);
+        } else {
+          console.log(logMessage);
+        }
+        break;
+      case 'warn':
+        if (data) {
+          console.warn(logMessage, data);
+        } else {
+          console.warn(logMessage);
+        }
+        break;
+      case 'error':
+        if (data) {
+          console.error(logMessage, data);
+        } else {
+          console.error(logMessage);
+        }
+        break;
+    }
+  }
+
   /**
    * Validate if the URL is a valid YouTube URL
    * @param url The URL to validate
    * @returns True if the URL is a valid YouTube URL
    */
   validateURL(url: string): boolean {
-    return ytdl.validateURL(url);
+    this.log('info', `Validating URL: ${url}`);
+    const isValid = ytdl.validateURL(url);
+    
+    if (isValid) {
+      this.log('info', `URL is valid YouTube URL: ${url}`);
+    } else {
+      this.log('warn', `URL is not a valid YouTube URL: ${url}`);
+    }
+    
+    return isValid;
   }
 
   /**
@@ -22,10 +66,14 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns The video ID or null if invalid
    */
   getVideoID(url: string): string | null {
+    this.log('info', `Extracting video ID from URL: ${url}`);
+    
     try {
-      return ytdl.getURLVideoID(url);
+      const videoId = ytdl.getURLVideoID(url);
+      this.log('info', `Successfully extracted video ID: ${videoId} from URL: ${url}`);
+      return videoId;
     } catch (error) {
-      console.error('Failed to extract YouTube video ID:', error);
+      this.log('error', `Failed to extract YouTube video ID from URL: ${url}`, error);
       return null;
     }
   }
@@ -36,31 +84,29 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns Promise with video information
    */
   async getInfo(url: string): Promise<VideoInfo> {
+    this.log('info', `Getting video info for URL: ${url} via API`);
+    
     try {
-      // Fetch video info using ytdl-core
-      const info = await ytdl.getInfo(url);
+      // Fetch video info using our server API
+      const apiUrl = `${this.apiBaseUrl}/info?url=${encodeURIComponent(url)}`;
+      this.log('info', `Calling API endpoint: ${apiUrl}`);
       
-      // Map ytdl-core formats to our VideoFormat interface
-      const formats = info.formats.map((format) => ({
-        quality: this.formatQualityLabel(format),
-        format: format.mimeType?.split(';')[0] || 'unknown',
-        container: format.container || 'mp4',
-        hasAudio: !!format.hasAudio,
-        hasVideo: !!format.hasVideo,
-        size: format.contentLength ? parseInt(format.contentLength) : undefined,
-        bitrate: format.bitrate,
-        url: format.url  // Include direct URL for downloading
-      }));
-
-      return {
-        title: info.videoDetails.title,
-        thumbnail: info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1]?.url || '',
-        formats,
-        platform: 'youtube'
-      };
+      const response = await fetch(apiUrl);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      this.log('info', `Successfully retrieved video info from API for URL: ${url}`);
+      
+      return data.videoInfo;
     } catch (error) {
-      console.error('Failed to get YouTube video info:', error);
-      throw new Error('Failed to get video information');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', `Failed to get YouTube video info for URL: ${url}. Error: ${errorMessage}`, error);
+      
+      throw new Error('Failed to get video information: ' + errorMessage);
     }
   }
 
@@ -71,59 +117,30 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns Promise with basic video preview information
    */
   async getPreviewInfo(url: string): Promise<VideoPreview> {
+    this.log('info', `Getting preview info for URL: ${url} via API`);
+    
     try {
-      // Use getBasicInfo to minimize data usage for preview
-      const info = await ytdl.getBasicInfo(url);
+      // Fetch video preview info using our server API (same endpoint as getInfo)
+      const apiUrl = `${this.apiBaseUrl}/info?url=${encodeURIComponent(url)}`;
+      this.log('info', `Calling API endpoint: ${apiUrl}`);
       
-      // Format duration from seconds to readable time
-      let durationStr = '';
-      if (info.videoDetails.lengthSeconds) {
-        const duration = parseInt(info.videoDetails.lengthSeconds);
-        const hours = Math.floor(duration / 3600);
-        const minutes = Math.floor((duration % 3600) / 60);
-        const seconds = duration % 60;
-        
-        if (hours > 0) {
-          durationStr = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        } else {
-          durationStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        }
+      const response = await fetch(apiUrl);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
       
-      // Format view count with commas
-      const views = info.videoDetails.viewCount ? 
-        parseInt(info.videoDetails.viewCount).toLocaleString() : 
-        'Unknown';
-
-      return {
-        title: info.videoDetails.title,
-        thumbnail: info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1]?.url || '',
-        duration: durationStr,
-        author: info.videoDetails.author?.name || 'Unknown',
-        views: `${views} views`,
-        platform: 'youtube'
-      };
+      const data = await response.json();
+      this.log('info', `Successfully retrieved video preview from API for URL: ${url}`);
+      
+      return data.videoPreview;
     } catch (error) {
-      console.error('Failed to get YouTube video preview:', error);
-      throw new Error('Failed to get video preview information');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', `Failed to get YouTube video preview for URL: ${url}. Error: ${errorMessage}`, error);
+      
+      throw new Error('Failed to get video preview information: ' + errorMessage);
     }
-  }
-
-  /**
-   * Format the quality label to a user-friendly format
-   * @param format The ytdl-core format object
-   * @returns A user-friendly quality label
-   */
-  private formatQualityLabel(format: ytdl.videoFormat): string {
-    if (format.qualityLabel) {
-      return format.qualityLabel;
-    }
-    
-    if (format.hasAudio && !format.hasVideo) {
-      return `Audio ${format.audioBitrate}kbps`;
-    }
-    
-    return format.quality.toString() || 'unknown';
   }
 
   /**
@@ -133,6 +150,8 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns The chosen format
    */
   chooseFormat(info: VideoInfo, quality: string): VideoFormat {
+    this.log('info', `Choosing format with quality: ${quality} from ${info.formats.length} available formats`);
+    
     // Filter formats based on quality
     const matchingFormats = info.formats.filter(format => {
       // For audio-only requests
@@ -140,17 +159,52 @@ export class YouTubeDownloader extends VideoDownloader {
         return format.hasAudio && !format.hasVideo;
       }
       
-      // For specific video quality
+      // Check if the format matches the selected quality string
+      // Now format.quality contains more details like resolution, codec, and file size
       return format.quality.includes(quality);
     });
     
+    this.log('info', `Found ${matchingFormats.length} formats matching quality: ${quality}`);
+    
+    // If no format matched the exact quality string (which now includes more details),
+    // try to match just the resolution part
+    if (matchingFormats.length === 0 && quality.includes('p')) {
+      // Extract just the resolution (e.g., "1080p" from "1080p - H.264 (50.5MB)")
+      const resolution = quality.split(' - ')[0].trim();
+      
+      const resolutionMatches = info.formats.filter(format => 
+        format.quality.startsWith(resolution)
+      );
+      
+      this.log('info', `Falling back to resolution match: found ${resolutionMatches.length} formats matching resolution: ${resolution}`);
+      
+      if (resolutionMatches.length > 0) {
+        // Sort by bitrate for better quality selection
+        const sortedFormats = resolutionMatches.sort((a, b) => {
+          return (b.bitrate || 0) - (a.bitrate || 0);
+        });
+        
+        const selectedFormat = sortedFormats[0];
+        this.log('info', `Selected format by resolution: ${selectedFormat.quality}`);
+        return selectedFormat;
+      }
+    }
+    
     // Sort by bitrate for better quality selection
-    const sortedFormats = matchingFormats.sort((a, b) => {
-      return (b.bitrate || 0) - (a.bitrate || 0);
-    });
+    const sortedFormats = matchingFormats.length > 0 ? 
+      matchingFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)) : 
+      info.formats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
     
     // Return the highest quality format matching the criteria, or the first format if none match
-    return sortedFormats[0] || info.formats[0];
+    const selectedFormat = sortedFormats[0] || info.formats[0];
+    
+    if (selectedFormat) {
+      this.log('info', `Selected format: ${selectedFormat.quality}, hasAudio: ${selectedFormat.hasAudio}, hasVideo: ${selectedFormat.hasVideo}, bitrate: ${selectedFormat.bitrate}`);
+    } else {
+      this.log('warn', `No matching format found for quality: ${quality}, falling back to first available format`);
+    }
+    
+    return selectedFormat;
   }
 
   /**
@@ -160,84 +214,55 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns A ReadableStream for the video
    */
   createDownloadStream(url: string, format: VideoFormat): ReadableStream {
+    this.log('info', `Creating download stream for URL: ${url}, format: ${format.quality}`);
+    
     try {
-      // If format already has a direct URL, use it
-      if (format.url) {
-        // Return a new ReadableStream that fetches the content
-        return new ReadableStream({
-          async start(controller) {
-            try {
-              const response = await fetch(format.url!);
-              
-              if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-              }
-              
-              if (!response.body) {
-                throw new Error('Response body is null');
-              }
-              
-              const reader = response.body.getReader();
-              
-              // Read the stream
-              while (true) {
-                const { done, value } = await reader.read();
-                
-                if (done) {
-                  controller.close();
-                  break;
-                }
-                
-                controller.enqueue(value);
-              }
-            } catch (error) {
-              console.error('Error in fetch stream:', error);
-              controller.error(error);
-            }
-          }
-        });
+      const itag = (format as any).itag;
+      
+      if (!itag) {
+        throw new Error("Format doesn't have an itag identifier");
       }
       
-      // Otherwise, set up ytdl options based on the format
-      const ytdlOptions: ytdl.downloadOptions = {
-        quality: format.quality,
-        filter: (f) => {
-          const hasMatchingFormat = f.mimeType?.includes(format.format) || false;
-          const hasMatchingContainer = f.container === format.container;
-          
-          const audioMatch = format.hasAudio ? f.hasAudio : true;
-          const videoMatch = format.hasVideo ? f.hasVideo : true;
-          
-          return hasMatchingFormat && hasMatchingContainer && audioMatch && videoMatch;
-        }
-      };
-
-      // Create ytdl stream
-      const ytdlStream = ytdl(url, ytdlOptions);
+      const downloadUrl = `${this.apiBaseUrl}/download?url=${encodeURIComponent(url)}&itag=${itag}`;
+      this.log('info', `Using API download URL: ${downloadUrl}`);
       
-      // Convert Node.js stream to Web ReadableStream
+      // Create a new ReadableStream that performs the fetch when needed
       return new ReadableStream({
-        start(controller) {
-          ytdlStream.on('data', (chunk) => {
-            controller.enqueue(chunk);
-          });
-          
-          ytdlStream.on('end', () => {
-            controller.close();
-          });
-          
-          ytdlStream.on('error', (error) => {
-            console.error('Error in ytdl stream:', error);
+        async start(controller) {
+          try {
+            const response = await fetch(downloadUrl);
+            
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            if (!response.body) {
+              throw new Error('Response body is null');
+            }
+            
+            const reader = response.body.getReader();
+            
+            // Read the stream and forward to our controller
+            while (true) {
+              const { done, value } = await reader.read();
+              
+              if (done) {
+                controller.close();
+                break;
+              }
+              
+              controller.enqueue(value);
+            }
+          } catch (error) {
+            console.error('Error in fetch stream:', error);
             controller.error(error);
-          });
-        },
-        cancel() {
-          ytdlStream.destroy();
+          }
         }
       });
     } catch (error) {
-      console.error('Failed to create download stream:', error);
-      throw new Error('Failed to create download stream');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', `Failed to create download stream for URL: ${url}. Error: ${errorMessage}`, error);
+      throw new Error('Failed to create download stream: ' + errorMessage);
     }
   }
 
@@ -248,59 +273,47 @@ export class YouTubeDownloader extends VideoDownloader {
    * @param filename Optional filename (without extension)
    */
   async downloadVideo(url: string, format: VideoFormat, filename?: string): Promise<void> {
+    this.log('info', `Starting download for URL: ${url}, format: ${format.quality}`);
+    
     try {
-      // Get video info to get title if filename is not provided
-      const info = filename ? null : await ytdl.getBasicInfo(url);
+      const itag = (format as any).itag;
       
-      // Determine the filename
-      const videoFilename = filename || this.sanitizeFilename(info?.videoDetails.title || 'youtube-video');
-      const extension = format.container;
-      const fullFilename = `${videoFilename}.${extension}`;
-      
-      // Use direct URL if available
-      if (format.url) {
-        const downloadUrl = format.url;
-        
-        // Create and click a download link
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = fullFilename;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        
-        // Clean up
-        setTimeout(() => {
-          document.body.removeChild(a);
-        }, 100);
-        
-        return;
+      if (!itag) {
+        throw new Error("Format doesn't have an itag identifier");
       }
       
-      // Otherwise create download stream
-      const stream = this.createDownloadStream(url, format);
+      // Build download URL with all parameters
+      let downloadUrl = `${this.apiBaseUrl}/download?url=${encodeURIComponent(url)}&itag=${itag}`;
       
-      // Create a download link
-      const response = new Response(stream);
-      const blob = await response.blob();
-      const downloadUrl = URL.createObjectURL(blob);
+      if (filename) {
+        const sanitizedFilename = this.sanitizeFilename(filename);
+        downloadUrl += `&filename=${encodeURIComponent(sanitizedFilename)}`;
+      }
       
-      // Create and click a download link
+      this.log('info', `Using API download URL: ${downloadUrl}`);
+      
+      // Create and click a download link to the API
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = fullFilename;
+      a.download = ''; // Let the server set the filename
       a.style.display = 'none';
       document.body.appendChild(a);
+      
+      this.log('info', `Triggering download via anchor element`);
       a.click();
       
       // Clean up
       setTimeout(() => {
         document.body.removeChild(a);
-        URL.revokeObjectURL(downloadUrl);
+        this.log('info', `Download link element removed from DOM`);
       }, 100);
+      
+      this.log('info', `Download initiated successfully using API method`);
     } catch (error) {
-      console.error('Failed to download video:', error);
-      throw new Error('Failed to download video');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.log('error', `Failed to download video for URL: ${url}. Error: ${errorMessage}`, error);
+      
+      throw new Error('Failed to download video: ' + errorMessage);
     }
   }
   
@@ -310,9 +323,15 @@ export class YouTubeDownloader extends VideoDownloader {
    * @returns A sanitized filename
    */
   private sanitizeFilename(filename: string): string {
-    return filename
+    const sanitized = filename
       .replace(/[\\/:*?"<>|]/g, '_') // Replace invalid characters
       .trim()
       .substring(0, 200); // Limit length
+    
+    if (sanitized !== filename) {
+      this.log('info', `Sanitized filename: "${filename}" → "${sanitized}"`);
+    }
+    
+    return sanitized;
   }
 } 
